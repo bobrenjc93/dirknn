@@ -29,12 +29,14 @@ type FileData = {
 type FileIndex = {
   paths: string[];
   lengths: { [path: string]: number };
+  // Add similarity map to store pre-calculated distances
+  similarities: { [path: string]: Array<{ path: string; distance: number }> };
 };
 
 // Optimized Levenshtein distance with early termination
 function editDistance(a: string, b: string, maxDistance = Infinity): number {
   if (!a || !b) {
-    return maxDistance
+    return maxDistance;
   }
   // Early length checks
   const lenA = a.length;
@@ -46,7 +48,7 @@ function editDistance(a: string, b: string, maxDistance = Infinity): number {
   // Use smaller arrays and only keep track of current and previous row
   let prev = new Array(lenB + 1);
   let curr = new Array(lenB + 1);
-  
+
   // Initialize first row
   for (let i = 0; i <= lenB; i++) prev[i] = i;
 
@@ -58,8 +60,8 @@ function editDistance(a: string, b: string, maxDistance = Infinity): number {
     for (let j = 1; j <= lenB; j++) {
       curr[j] = Math.min(
         prev[j] + 1,
-        curr[j-1] + 1,
-        prev[j-1] + (a[i-1] === b[j-1] ? 0 : 1)
+        curr[j - 1] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
       );
       minInRow = Math.min(minInRow, curr[j]);
     }
@@ -74,51 +76,70 @@ function editDistance(a: string, b: string, maxDistance = Infinity): number {
   return prev[lenB];
 }
 
-// Optimized KNN with early pruning using file index
-function findKNN(fileIndex: FileIndex, data: FileData, target: string, k: number = 5): Array<{path: string, distance: number}> {
-  const targetContent = data[target];
-  const targetLen = fileIndex.lengths[target];
-  
-  // Pre-filter candidates using length
-  const candidates = fileIndex.paths.filter(path => {
-    if (path === target) return false;
-    const len = fileIndex.lengths[path];
-    return Math.abs(len - targetLen) <= targetLen / 2;
-  });
+// Calculate similarities for all files upfront
+function calculateAllSimilarities(
+  data: FileData,
+  fileIndex: FileIndex,
+  k: number = 5
+): { [path: string]: Array<{ path: string; distance: number }> } {
+  const similarities: {
+    [path: string]: Array<{ path: string; distance: number }>;
+  } = {};
 
-  // Calculate distances only for promising candidates
-  const distances = candidates.map(path => ({
-    path,
-    distance: editDistance(targetContent, data[path], targetLen)
-  }))
-  .filter(item => item.distance !== Infinity)
-  .sort((a, b) => a.distance - b.distance)
-  .slice(0, k);
+  for (const targetPath of fileIndex.paths) {
+    const targetContent = data[targetPath];
+    const targetLen = fileIndex.lengths[targetPath];
 
-  return distances;
+    // Pre-filter candidates using length
+    const candidates = fileIndex.paths.filter((path) => {
+      if (path === targetPath) return false;
+      const len = fileIndex.lengths[path];
+      return Math.abs(len - targetLen) <= targetLen / 2;
+    });
+
+    // Calculate distances
+    const distances = candidates
+      .map((path) => ({
+        path,
+        distance: editDistance(targetContent, data[path], targetLen),
+      }))
+      .filter((item) => item.distance !== Infinity)
+      .sort((a, b) => a.distance - b.distance)
+      .slice(0, k);
+
+    similarities[targetPath] = distances;
+  }
+
+  return similarities;
 }
 
 // Memoized diff function
 function getDiffLines(str1: string, str2: string) {
-  const lines1 = str1.split('\n');
-  const lines2 = str2.split('\n');
-  const result1: { text: string; type: 'same' | 'removed' }[] = [];
-  const result2: { text: string; type: 'same' | 'added' }[] = [];
+  str1 = str1 || ""
+  str2 = str2 || ""
 
-  let i = 0, j = 0;
+
+  console.log(str1, str2)
+  const lines1 = str1.split("\n");
+  const lines2 = str2.split("\n");
+  const result1: { text: string; type: "same" | "removed" }[] = [];
+  const result2: { text: string; type: "same" | "added" }[] = [];
+
+  let i = 0,
+    j = 0;
   while (i < lines1.length || j < lines2.length) {
     if (i < lines1.length && j < lines2.length && lines1[i] === lines2[j]) {
-      result1.push({ text: lines1[i], type: 'same' });
-      result2.push({ text: lines2[j], type: 'same' });
+      result1.push({ text: lines1[i], type: "same" });
+      result2.push({ text: lines2[j], type: "same" });
       i++;
       j++;
     } else {
       if (i < lines1.length) {
-        result1.push({ text: lines1[i], type: 'removed' });
+        result1.push({ text: lines1[i], type: "removed" });
         i++;
       }
       if (j < lines2.length) {
-        result2.push({ text: lines2[j], type: 'added' });
+        result2.push({ text: lines2[j], type: "added" });
         j++;
       }
     }
@@ -128,116 +149,135 @@ function getDiffLines(str1: string, str2: string) {
 }
 
 export default function Home() {
-  const [fileIndex, setFileIndex] = useState<FileIndex>({ paths: [], lengths: {} });
+  const [fileIndex, setFileIndex] = useState<FileIndex>({
+    paths: [],
+    lengths: {},
+    similarities: {},
+  });
   const [data, setData] = useState<FileData>({});
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
-  const [selectedSimilarFile, setSelectedSimilarFile] = useState<string | null>(null);
+  const [selectedSimilarFile, setSelectedSimilarFile] = useState<string | null>(
+    null
+  );
   const [searchQuery, setSearchQuery] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
 
   // Initialize IndexedDB
   useEffect(() => {
-    const request = indexedDB.open('fileViewerDB', 1);
+    const request = indexedDB.open("fileViewerDB", 2); // Increment version for new schema
 
     request.onerror = () => {
-      console.error('Error opening IndexedDB');
+      console.error("Error opening IndexedDB");
     };
 
     request.onupgradeneeded = (event) => {
       const db = (event.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('files')) {
-        db.createObjectStore('files');
+      if (!db.objectStoreNames.contains("files")) {
+        db.createObjectStore("files");
       }
     };
 
-    // Don't clear IndexedDB on initial load to persist data
     request.onsuccess = () => {
       const db = request.result;
       db.close();
     };
   }, []);
 
-  // Load only required files from IndexedDB or fetch them
-  const loadFileContent = async (path: string) => {
-    const db = await openDB();
-    const transaction = db.transaction('files', 'readonly');
-    const store = transaction.objectStore('files');
-    const request = store.get(path);
-    
-    request.onsuccess = async () => {
-      const cached = request.result;
-      db.close();
-      
-      if (cached) {
-        setData(prev => ({ ...prev, [path]: cached }));
-        return;
-      }
-    };
-  };
-
   // Helper function to open IndexedDB
   const openDB = (): Promise<IDBDatabase> => {
     return new Promise((resolve, reject) => {
-      const request = indexedDB.open('fileViewerDB', 1);
+      const request = indexedDB.open("fileViewerDB", 2);
       request.onerror = () => reject(request.error);
       request.onsuccess = () => resolve(request.result);
     });
   };
 
-  // Memoize expensive computations
-  const similarFiles = useMemo(() => 
-    selectedFile ? findKNN(fileIndex, data, selectedFile) : [],
-    [fileIndex, data, selectedFile]
-  );
-
-  const filteredFiles = useMemo(() =>
-    fileIndex?.paths?.filter(path =>
-      path.toLowerCase().includes(searchQuery.toLowerCase())
-    ) || [],
-    [fileIndex?.paths, searchQuery]
-  );
-
-  const diffResult = useMemo(() =>
-    selectedFile && selectedSimilarFile && data[selectedFile] && data[selectedSimilarFile]
-      ? getDiffLines(data[selectedFile], data[selectedSimilarFile])
-      : { left: [], right: [] },
-    [data, selectedFile, selectedSimilarFile]
-  );
-
-  // Initialize file index
+  // Initialize data and calculate similarities
   useEffect(() => {
-    const fetchIndex = async () => {
+    const initialize = async () => {
+      setIsLoading(true);
       try {
-        const response = await fetch(`/data.json`);
+        const db = await openDB();
+
+        // Initial data load and similarity calculation
+        const response = await fetch("/data.json");
         if (response.ok) {
           const jsonResponse = await response.json();
           if (jsonResponse) {
             const paths = Object.keys(jsonResponse);
             const lengths = Object.fromEntries(
-              paths.map(path => [path, jsonResponse[path].length])
+              paths.map((path) => [path, jsonResponse[path].length])
             );
-            setFileIndex({ paths, lengths });
-            const db = await openDB();
-            const transaction = db.transaction('files', 'readwrite');
-            const store = transaction.objectStore('files');
-            for (let i = 0; i < paths.length; i++) {
-              let path = paths[i];
-              await store.put(path, jsonResponse[path]);
+
+            // Calculate similarities
+            const similarities = calculateAllSimilarities(jsonResponse, {
+              paths,
+              lengths,
+              similarities: {},
+            });
+
+            // Save everything to IndexedDB
+            const writeTx = db.transaction(
+              ["files"],
+              "readwrite"
+            );
+            const fileStore = writeTx.objectStore("files");
+            // Save files
+            for (const [path, content] of Object.entries(jsonResponse)) {
+              await fileStore.put(content, path);
             }
-            db.close();
+
+            const newIndex = { paths, lengths, similarities };
+
+            setFileIndex(newIndex);
+
+            // Only keep selected file data in memory
+            if (selectedFile) {
+              setData({ [selectedFile]: jsonResponse[selectedFile] });
+            }
           }
         }
+
+        db.close();
       } catch (error) {
-        console.error('Error fetching index:', error);
+        console.error("Error initializing data:", error);
       }
+      setIsLoading(false);
     };
 
-    fetchIndex();
+    initialize();
   }, []);
 
-  // Load selected file contents
+  // Load file content when needed
+  const loadFileContent = async (path: string) => {
+    const db = await openDB();
+    const tx = db.transaction("files", "readonly");
+    const store = tx.objectStore("files");
+    const request = store.get(path);
+    const content: string = await new Promise((resolve) => {
+      request.onsuccess = () => resolve(request.result);
+    });
+    db.close();
+
+    if (content) {
+      setData((prev) => ({ ...prev, [path]: content }));
+    }
+  };
+
+  // Load selected file contents and cleanup old data
   useEffect(() => {
-    if (selectedFile && !data[selectedFile]) {
-      loadFileContent(selectedFile);
+    if (selectedFile) {
+      if (!data[selectedFile]) {
+        loadFileContent(selectedFile);
+      }
+      // Cleanup old data, keeping only selected and similar file
+      setData((prev) => {
+        const newData: FileData = {};
+        if (selectedFile) newData[selectedFile] = prev[selectedFile];
+        if (selectedSimilarFile)
+          newData[selectedSimilarFile] = prev[selectedSimilarFile];
+        return newData;
+      });
     }
   }, [selectedFile]);
 
@@ -248,11 +288,43 @@ export default function Home() {
     }
   }, [selectedSimilarFile]);
 
+  const filteredFiles = useMemo(
+    () =>
+      fileIndex?.paths?.filter((path) =>
+        path.toLowerCase().includes(searchQuery.toLowerCase())
+      ) || [],
+    [fileIndex?.paths, searchQuery]
+  );
+
+  const similarFiles = useMemo(
+    () => (selectedFile ? fileIndex.similarities[selectedFile] || [] : []),
+    [fileIndex.similarities, selectedFile]
+  );
+
+  const diffResult = useMemo(
+    () =>
+      selectedFile &&
+      selectedSimilarFile &&
+      data[selectedFile] &&
+      data[selectedSimilarFile]
+        ? getDiffLines(data[selectedFile], data[selectedSimilarFile])
+        : { left: [], right: [] },
+    [data, selectedFile, selectedSimilarFile]
+  );
+
   useEffect(() => {
     if (selectedFile && similarFiles.length > 0) {
       setSelectedSimilarFile(similarFiles[0].path);
     }
   }, [selectedFile, similarFiles]);
+
+  if (isLoading) {
+    return (
+      <div className="h-screen flex items-center justify-center">
+        Loading...
+      </div>
+    );
+  }
 
   return (
     <div className="h-screen">
@@ -322,7 +394,7 @@ export default function Home() {
                     <SelectValue placeholder="Select a similar file" />
                   </SelectTrigger>
                   <SelectContent>
-                    {similarFiles.map(({path, distance}) => (
+                    {similarFiles.map(({ path, distance }) => (
                       <SelectItem key={path} value={path}>
                         {path} (edit distance: {distance})
                       </SelectItem>
@@ -340,7 +412,7 @@ export default function Home() {
                       <code
                         key={idx}
                         className={`block ${
-                          line.type === 'removed' ? 'bg-red-900/20' : ''
+                          line.type === "removed" ? "bg-red-900/20" : ""
                         }`}
                       >
                         {line.text}
@@ -363,7 +435,7 @@ export default function Home() {
                       <code
                         key={idx}
                         className={`block ${
-                          line.type === 'added' ? 'bg-green-900/20' : ''
+                          line.type === "added" ? "bg-green-900/20" : ""
                         }`}
                       >
                         {line.text}
