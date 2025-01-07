@@ -26,29 +26,7 @@ type FileData = {
   [path: string]: string;
 };
 
-let DATA: FileData = {
-  "src/main.rs": `fn main() {
-    println!("Hello World!");
-    let x = 42;
-    println!("The answer is {}", x);
-}`,
-  "examples/hello.rs": `fn main() {
-    println!("Hello from example!");
-    let message = "Welcome";
-    println!("{}", message);
-}`,
-  "tests/basic.rs": `#[test]
-fn test_main() {
-    assert_eq!(2 + 2, 4);
-}`,
-};
-
-// Scripts can regex for this and replace with 
-// their specific data.
-const JSON_DATA = null;
-if (JSON_DATA) {
-  DATA = JSON.parse(JSON_DATA);
-}
+let DATA: FileData = {};
 
 // Simple Levenshtein distance implementation
 function editDistance(a: string, b: string): number {
@@ -83,12 +61,12 @@ function editDistance(a: string, b: string): number {
 }
 
 // Find K nearest neighbors
-function findKNN(target: string, k: number = 5): string[] {
-  const distances = Object.entries(DATA)
+function findKNN(data, target: string, k: number = 5): string[] {
+  const distances = Object.entries(data)
     .filter(([path]) => path !== target)
-    .map(([path, content]) => ({
+    .map(([path, content]: any) => ({
       path,
-      distance: editDistance(DATA[target], content),
+      distance: editDistance(data[target], content),
     }))
     .sort((a, b) => a.distance - b.distance)
     .slice(0, k);
@@ -125,11 +103,32 @@ function getDiffLines(str1: string, str2: string) {
 }
 
 export default function Home() {
+  const [data, setData] = useState(DATA);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [selectedSimilarFile, setSelectedSimilarFile] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
-  const similarFiles = selectedFile ? findKNN(selectedFile) : [];
-  
+  const similarFiles = selectedFile ? findKNN(data, selectedFile) : [];
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await fetch(`${window.location.href}/data.json`);
+        if (response.ok) {
+          const jsonResponse = await response.json();
+          if (jsonResponse) {
+            setData(jsonResponse); // Update state with the fetched JSON data
+          }
+        } else {
+          console.error('Failed to fetch JSON data:', response.statusText);
+        }
+      } catch (error) {
+        console.error('Error while fetching JSON data:', error);
+      }
+    };
+
+    fetchData();
+  }, []);
+
   // Update selectedSimilarFile whenever selectedFile changes
   useEffect(() => {
     if (selectedFile && similarFiles.length > 0) {
@@ -137,11 +136,11 @@ export default function Home() {
     }
   }, [selectedFile]);
 
-  const diffResult = selectedFile && selectedSimilarFile 
-    ? getDiffLines(DATA[selectedFile], DATA[selectedSimilarFile])
-    : { left: [{ text: DATA[selectedFile || ''], type: 'same' }], right: [] };
+  const diffResult = selectedFile && selectedSimilarFile
+    ? getDiffLines(data[selectedFile], data[selectedSimilarFile])
+    : { left: [{ text: data[selectedFile || ''], type: 'same' }], right: [] };
 
-  const filteredFiles = Object.keys(DATA).filter(path =>
+  const filteredFiles = Object.keys(data).filter(path =>
     path.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
@@ -181,7 +180,7 @@ export default function Home() {
         </ResizablePanel>
 
         <ResizableHandle withHandle />
-        
+
         <ResizablePanel defaultSize={75}>
           <div className="flex flex-col h-full">
             <div className="grid grid-cols-2 gap-4 p-6">
@@ -222,7 +221,7 @@ export default function Home() {
                 </Select>
               </div>
             </div>
-            
+
             <div className="grid grid-cols-2 flex-1 overflow-hidden">
               <div className="h-full overflow-y-auto border-r px-6">
                 {selectedFile ? (
