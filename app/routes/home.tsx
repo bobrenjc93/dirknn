@@ -34,18 +34,20 @@ type FileIndex = {
 
 // MinHash implementation
 function hashFunction(str: string, seed: number): number {
-  let hash = seed;
+  let hash = seed ^ 0x811C9DC5; // Initialize with seed XORed with a prime offset
   for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) + hash) + str.charCodeAt(i);
-    hash = hash & hash;
+    hash ^= str.charCodeAt(i);       // XOR the character code
+    hash = (hash * 16777619) >>> 0;  // Multiply by a prime number and ensure unsigned 32-bit
   }
-  return Math.abs(hash);
+  return hash >>> 0; // Ensure non-negative result by returning unsigned 32-bit
 }
 
-function getMinHash(text: string, numHashes: number = 100): number[] {
+function getMinHash(text: string, numHashes: number = 3): number[] {
   // Split into sentences using basic punctuation
-  const sentences = text.split(/[.!?]+/).filter(s => s.trim());
-  
+  const sentences = text
+    .slice(0, 10000)
+    .split('\n')
+
   // Initialize signature array
   const signature = new Array(numHashes).fill(Infinity);
 
@@ -74,10 +76,10 @@ function calculateSimilarities(
   data: FileData,
   selectedPath: string,
   allPaths: string[],
-  k: number = 5
+  k: number = 50,
 ): Array<{ path: string; similarity: number }> {
   const selectedSig = getMinHash(data[selectedPath]);
-  
+
   return allPaths
     .filter(path => path !== selectedPath)
     .map(path => ({
@@ -139,11 +141,13 @@ export default function Home() {
       setIsLoading(true);
       setProgress(0);
       try {
-        const response = await fetch("/data.json");
+        const urlParams = new URLSearchParams(window.location.search);
+        const url = urlParams.get('url');
+        const response = await fetch(url);
         if (response.ok) {
           const jsonData = await response.json();
           setProgress(50);
-          
+
           const paths = Object.keys(jsonData);
           const lengths = Object.fromEntries(
             paths.map((path) => [path, jsonData[path].length])
@@ -271,7 +275,7 @@ export default function Home() {
                   <SelectContent>
                     {similarFiles.map(({ path, similarity }) => (
                       <SelectItem key={path} value={path}>
-                        {path} ({Math.round(similarity * 100)}% similar)
+                        {path} (~{Math.round(similarity * 100)}% similar)
                       </SelectItem>
                     ))}
                   </SelectContent>
