@@ -42,7 +42,7 @@ function hashFunction(str: string, seed: number): number {
   return hash >>> 0; // Ensure non-negative result by returning unsigned 32-bit
 }
 
-function getMinHash(text: string, numHashes: number = 3): number[] {
+function getMinHash(text: string, numHashes: number = 10): number[] {
   // Split into sentences using basic punctuation
   const sentences = text
     .slice(0, 10000)

@@ -37,7 +37,7 @@ def write_json_to_file(output_path: str, json_data: str) -> None:
 
 if __name__ == "__main__":
     # Replace with the actual paths
-    directory = './app'
+    directory = '/tmp/a'
     output_file_path = './public/data.json'
 
     # Generate JSON data and write to file
