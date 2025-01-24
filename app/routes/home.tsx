@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { Progress } from "~/components/ui/progress";
 import {
   ResizableHandle,
@@ -90,15 +90,12 @@ function calculateSimilarities(
     .slice(0, k);
 }
 
-// Memoized diff function
-function getDiffLines(str1: string, str2: string) {
-  str1 = str1 || ""
-  str2 = str2 || ""
-
-  const lines1 = str1.split("\n");
-  const lines2 = str2.split("\n");
-  const result1: { text: string; type: "same" | "removed" }[] = [];
-  const result2: { text: string; type: "same" | "added" }[] = [];
+// Line level diff function
+function getLineDiffs(str1: string, str2: string) {
+  const lines1 = str1.split('\n');
+  const lines2 = str2.split('\n');
+  const result1: { text: string; type: "same" | "removed" | "diff"; wordsDiff?: string[] }[] = [];
+  const result2: { text: string; type: "same" | "added" | "diff"; wordsDiff?: string[] }[] = [];
 
   let i = 0,
     j = 0;
@@ -109,14 +106,23 @@ function getDiffLines(str1: string, str2: string) {
       i++;
       j++;
     } else {
-      if (i < lines1.length) {
-        result1.push({ text: lines1[i], type: "removed" });
-        i++;
+      const words1 = lines1[i]?.split(' ') || [];
+      const words2 = lines2[j]?.split(' ') || [];
+      const wordsDiff1 = words1.map(word => words2.includes(word) ? word : `<span class="text-red-500">${word}</span>`);
+      const wordsDiff2 = words2.map(word => words1.includes(word) ? word : `<span class="text-green-500">${word}</span>`);
+
+      result1.push({ text: wordsDiff1.join(' '), type: "diff" });
+      result2.push({ text: wordsDiff2.join(' '), type: "diff" });
+
+      // Add empty lines to align the heights
+      if (lines1.length > lines2.length) {
+        result2.push({ text: "", type: "same" });
+      } else if (lines2.length > lines1.length) {
+        result1.push({ text: "", type: "same" });
       }
-      if (j < lines2.length) {
-        result2.push({ text: lines2[j], type: "added" });
-        j++;
-      }
+
+      i++;
+      j++;
     }
   }
 
@@ -135,6 +141,9 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState(0);
 
+  const leftPaneRef = useRef<HTMLDivElement>(null);
+  const rightPaneRef = useRef<HTMLDivElement>(null);
+
   // Initialize data
   useEffect(() => {
     const initialize = async () => {
@@ -143,7 +152,7 @@ export default function Home() {
       try {
         const urlParams = new URLSearchParams(window.location.search);
         const url = urlParams.get('url');
-        const response = await fetch(url);
+        const response = await fetch(url || "/data.json");
         if (response.ok) {
           const jsonData = await response.json();
           setProgress(50);
@@ -168,9 +177,11 @@ export default function Home() {
 
   const filteredFiles = useMemo(
     () =>
-      fileIndex?.paths?.filter((path) =>
-        path.toLowerCase().includes(searchQuery.toLowerCase())
-      ) || [],
+      fileIndex?.paths
+        ?.filter((path) =>
+          path.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+        .sort((a, b) => a.localeCompare(b)) || [],
     [fileIndex?.paths, searchQuery]
   );
 
@@ -185,7 +196,7 @@ export default function Home() {
       selectedSimilarFile &&
       data[selectedFile] &&
       data[selectedSimilarFile]
-        ? getDiffLines(data[selectedFile], data[selectedSimilarFile])
+        ? getLineDiffs(data[selectedFile], data[selectedSimilarFile])
         : { left: [], right: [] },
     [data, selectedFile, selectedSimilarFile]
   );
@@ -195,6 +206,60 @@ export default function Home() {
       setSelectedSimilarFile(similarFiles[0].path);
     }
   }, [selectedFile, similarFiles]);
+
+  useEffect(() => {
+    const syncScroll = () => {
+      if (leftPaneRef.current && rightPaneRef.current) {
+        const leftLines = leftPaneRef.current.querySelectorAll('div');
+        const rightLines = rightPaneRef.current.querySelectorAll('div');
+
+        leftLines.forEach((leftLine, index) => {
+          leftLine.addEventListener('mouseenter', (event) => {
+            if (leftLine.getAttribute('data-type') === 'same') {
+              const targetElement = rightLines[index];
+              const parent = targetElement?.parentElement?.parentElement; // Adjust if needed to the actual scrollable container
+
+              if (!targetElement || !parent) return;
+
+              const parentRect = parent.getBoundingClientRect();
+              const elementRect = targetElement.getBoundingClientRect();
+
+              const mouseYRelativeToParent = event.clientY - parentRect.top + parent.scrollTop; // Adjust for parent scroll
+              const elementOffsetY = elementRect.top - parentRect.top + parent.scrollTop; // Element's Y relative to parent scroll
+
+              const targetScroll = elementOffsetY - (mouseYRelativeToParent - parent.scrollTop);
+
+              parent.scrollTo({ top: targetScroll, behavior: "smooth" });
+            }
+          });
+        });
+
+        rightLines.forEach((rightLine, index) => {
+          rightLine.addEventListener('mouseenter', (event) => {
+            if (rightLine.getAttribute('data-type') === 'same') {
+              const targetElement = leftLines[index];
+              const parent = targetElement?.parentElement?.parentElement; // Adjust if needed to the actual scrollable container
+
+              if (!targetElement || !parent) return;
+
+              const parentRect = parent.getBoundingClientRect();
+              const elementRect = targetElement.getBoundingClientRect();
+
+              const mouseYRelativeToParent = event.clientY - parentRect.top + parent.scrollTop; // Adjust for parent scroll
+              const elementOffsetY = elementRect.top - parentRect.top + parent.scrollTop; // Element's Y relative to parent scroll
+
+              const targetScroll = elementOffsetY - (mouseYRelativeToParent - parent.scrollTop);
+
+              parent.scrollTo({ top: targetScroll, behavior: "smooth" });
+            }
+          });
+        });
+
+      }
+    };
+
+    syncScroll();
+  }, [diffResult]);
 
   if (isLoading) {
     return (
@@ -284,18 +349,15 @@ export default function Home() {
             </div>
 
             <div className="grid grid-cols-2 flex-1 overflow-hidden">
-              <div className="h-full overflow-y-auto border-r px-6">
+              <div ref={leftPaneRef} className="h-full overflow-y-auto border-r px-6">
                 {selectedFile ? (
                   <pre className="p-4 rounded bg-muted">
                     {diffResult?.left.map((line, idx) => (
-                      <code
+                      <div
                         key={idx}
-                        className={`block ${
-                          line.type === "removed" ? "bg-red-900/20" : ""
-                        }`}
-                      >
-                        {line.text}
-                      </code>
+                        data-type={line.type}
+                        dangerouslySetInnerHTML={{ __html: line.text }}
+                      />
                     ))}
                   </pre>
                 ) : (
@@ -307,18 +369,15 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="h-full overflow-y-auto px-6">
+              <div ref={rightPaneRef} className="h-full overflow-y-auto px-6">
                 {selectedFile && selectedSimilarFile ? (
                   <pre className="p-4 rounded bg-muted">
                     {diffResult?.right.map((line, idx) => (
-                      <code
+                      <div
                         key={idx}
-                        className={`block ${
-                          line.type === "added" ? "bg-green-900/20" : ""
-                        }`}
-                      >
-                        {line.text}
-                      </code>
+                        data-type={line.type}
+                        dangerouslySetInnerHTML={{ __html: line.text }}
+                      />
                     ))}
                   </pre>
                 ) : (
