@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { Progress } from "~/components/ui/progress";
 import {
   ResizableHandle,
@@ -90,37 +90,77 @@ function calculateSimilarities(
     .slice(0, k);
 }
 
-// Memoized diff function
-function getDiffLines(str1: string, str2: string) {
-  str1 = str1 || ""
-  str2 = str2 || ""
+// Line level diff function using LCS algorithm
+function getLineDiffs(str1: string, str2: string) {
+  const lines1 = str1.split('\n');
+  const lines2 = str2.split('\n');
+  const lcs = longestCommonSubsequence(lines1, lines2);
 
-  const lines1 = str1.split("\n");
-  const lines2 = str2.split("\n");
-  const result1: { text: string; type: "same" | "removed" }[] = [];
-  const result2: { text: string; type: "same" | "added" }[] = [];
+  const result1: { text: string; type: "same" | "removed" | "diff"; wordsDiff?: string[] }[] = [];
+  const result2: { text: string; type: "same" | "added" | "diff"; wordsDiff?: string[] }[] = [];
 
-  let i = 0,
-    j = 0;
+  let i = 0, j = 0, k = 0;
   while (i < lines1.length || j < lines2.length) {
-    if (i < lines1.length && j < lines2.length && lines1[i] === lines2[j]) {
+    if (k < lcs.length && i < lines1.length && j < lines2.length && lines1[i] === lines2[j]) {
       result1.push({ text: lines1[i], type: "same" });
       result2.push({ text: lines2[j], type: "same" });
       i++;
       j++;
+      k++;
     } else {
-      if (i < lines1.length) {
-        result1.push({ text: lines1[i], type: "removed" });
+      const words1 = lines1[i]?.split(' ') || [];
+      const words2 = lines2[j]?.split(' ') || [];
+      const wordsDiff1 = words1.map(word => words2.includes(word) ? word : `<span class="text-red-500">${word}</span>`);
+      const wordsDiff2 = words2.map(word => words1.includes(word) ? word : `<span class="text-green-500">${word}</span>`);
+
+      if (i < lines1.length && (k >= lcs.length || lines1[i] !== lcs[k])) {
+        result1.push({ text: wordsDiff1.join(' '), type: "diff" });
         i++;
+      } else {
+        result1.push({ text: "&nbsp", type: "same" });
       }
-      if (j < lines2.length) {
-        result2.push({ text: lines2[j], type: "added" });
+
+      if (j < lines2.length && (k >= lcs.length || lines2[j] !== lcs[k])) {
+        result2.push({ text: wordsDiff2.join(' '), type: "diff" });
         j++;
+      } else {
+        result2.push({ text: "&nbsp", type: "same" });
       }
     }
   }
 
   return { left: result1, right: result2 };
+}
+
+function longestCommonSubsequence(arr1: string[], arr2: string[]): string[] {
+  const dp = Array(arr1.length + 1).fill(null).map(() => Array(arr2.length + 1).fill(0));
+
+  for (let i = 1; i <= arr1.length; i++) {
+    for (let j = 1; j <= arr2.length; j++) {
+      if (arr1[i - 1] === arr2[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  let i = arr1.length, j = arr2.length;
+  const lcs = [];
+
+  while (i > 0 && j > 0) {
+    if (arr1[i - 1] === arr2[j - 1]) {
+      lcs.unshift(arr1[i - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+
+  return lcs;
 }
 
 export default function Home() {
@@ -135,6 +175,9 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(true);
   const [progress, setProgress] = useState(0);
 
+  const leftPaneRef = useRef<HTMLDivElement>(null);
+  const rightPaneRef = useRef<HTMLDivElement>(null);
+
   // Initialize data
   useEffect(() => {
     const initialize = async () => {
@@ -143,7 +186,7 @@ export default function Home() {
       try {
         const urlParams = new URLSearchParams(window.location.search);
         const url = urlParams.get('url');
-        const response = await fetch(url);
+        const response = await fetch(url || "/data.json");
         if (response.ok) {
           const jsonData = await response.json();
           setProgress(50);
@@ -168,9 +211,11 @@ export default function Home() {
 
   const filteredFiles = useMemo(
     () =>
-      fileIndex?.paths?.filter((path) =>
-        path.toLowerCase().includes(searchQuery.toLowerCase())
-      ) || [],
+      fileIndex?.paths
+        ?.filter((path) =>
+          path.toLowerCase().includes(searchQuery.toLowerCase())
+        )
+        .sort((a, b) => a.localeCompare(b)) || [],
     [fileIndex?.paths, searchQuery]
   );
 
@@ -185,7 +230,7 @@ export default function Home() {
       selectedSimilarFile &&
       data[selectedFile] &&
       data[selectedSimilarFile]
-        ? getDiffLines(data[selectedFile], data[selectedSimilarFile])
+        ? getLineDiffs(data[selectedFile], data[selectedSimilarFile])
         : { left: [], right: [] },
     [data, selectedFile, selectedSimilarFile]
   );
@@ -195,6 +240,25 @@ export default function Home() {
       setSelectedSimilarFile(similarFiles[0].path);
     }
   }, [selectedFile, similarFiles]);
+
+  useEffect(() => {
+    const syncScroll = () => {
+      if (leftPaneRef.current && rightPaneRef.current) {
+        const leftPane = leftPaneRef.current;
+        const rightPane = rightPaneRef.current;
+
+        const syncScrollPosition = (sourcePane, targetPane) => {
+          const sourceScrollTop = sourcePane.scrollTop;
+          targetPane.scrollTop = sourceScrollTop;
+        };
+
+        leftPane.addEventListener('scroll', () => syncScrollPosition(leftPane, rightPane));
+        rightPane.addEventListener('scroll', () => syncScrollPosition(rightPane, leftPane));
+      }
+    };
+
+    syncScroll();
+  }, [diffResult]);
 
   if (isLoading) {
     return (
@@ -284,18 +348,15 @@ export default function Home() {
             </div>
 
             <div className="grid grid-cols-2 flex-1 overflow-hidden">
-              <div className="h-full overflow-y-auto border-r px-6">
+              <div ref={leftPaneRef} className="h-full overflow-y-auto border-r px-6">
                 {selectedFile ? (
                   <pre className="p-4 rounded bg-muted">
                     {diffResult?.left.map((line, idx) => (
-                      <code
+                      <div
                         key={idx}
-                        className={`block ${
-                          line.type === "removed" ? "bg-red-900/20" : ""
-                        }`}
-                      >
-                        {line.text}
-                      </code>
+                        data-type={line.type}
+                        dangerouslySetInnerHTML={{ __html: line.text }}
+                      />
                     ))}
                   </pre>
                 ) : (
@@ -307,18 +368,15 @@ export default function Home() {
                 )}
               </div>
 
-              <div className="h-full overflow-y-auto px-6">
+              <div ref={rightPaneRef} className="h-full overflow-y-auto px-6">
                 {selectedFile && selectedSimilarFile ? (
                   <pre className="p-4 rounded bg-muted">
                     {diffResult?.right.map((line, idx) => (
-                      <code
+                      <div
                         key={idx}
-                        className={`block ${
-                          line.type === "added" ? "bg-green-900/20" : ""
-                        }`}
-                      >
-                        {line.text}
-                      </code>
+                        data-type={line.type}
+                        dangerouslySetInnerHTML={{ __html: line.text }}
+                      />
                     ))}
                   </pre>
                 ) : (
