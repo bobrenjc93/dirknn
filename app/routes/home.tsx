@@ -110,8 +110,15 @@ function getLineDiffs(str1: string, str2: string) {
     } else {
       const words1 = lines1[i]?.split(' ') || [];
       const words2 = lines2[j]?.split(' ') || [];
-      const wordsDiff1 = words1.map(word => words2.includes(word) ? word : `<span class="text-red-500">${word}</span>`);
-      const wordsDiff2 = words2.map(word => words1.includes(word) ? word : `<span class="text-green-500">${word}</span>`);
+      const wordsDiff1 = words1.slice(0, 100).map(word => words2.includes(word) ? word : `<span class="text-red-500">${word}</span>`);
+      const wordsDiff2 = words2.slice(0, 100).map(word => words1.includes(word) ? word : `<span class="text-green-500">${word}</span>`);
+
+      if (words1.length > 100) {
+        wordsDiff1.push(`<span class="text-red-500">${words1.slice(100).join(' ')}</span>`);
+      }
+      if (words2.length > 100) {
+        wordsDiff2.push(`<span class="text-green-500">${words2.slice(100).join(' ')}</span>`);
+      }
 
       if (i < lines1.length && (k >= lcs.length || lines1[i] !== lcs[k])) {
         result1.push({ text: wordsDiff1.join(' '), type: "diff" });

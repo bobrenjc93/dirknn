@@ -1,9 +1,9 @@
 import type { Config } from "tailwindcss";
 
 export default {
-    darkMode: ["class"],
+	darkMode: "media",
     content: ["./app/**/{**,.client,.server}/**/*.{js,jsx,ts,tsx}"],
-  theme: {
+  	theme: {
   	extend: {
   		fontFamily: {
   			sans: [
