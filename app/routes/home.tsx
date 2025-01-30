@@ -254,7 +254,7 @@ export default function Home() {
         const leftPane = leftPaneRef.current;
         const rightPane = rightPaneRef.current;
 
-        const syncScrollPosition = (sourcePane, targetPane) => {
+        const syncScrollPosition = (sourcePane: HTMLDivElement, targetPane: HTMLDivElement) => {
           const sourceScrollTop = sourcePane.scrollTop;
           targetPane.scrollTop = sourceScrollTop;
         };
@@ -362,6 +362,9 @@ export default function Home() {
                       <div
                         key={idx}
                         data-type={line.type}
+                        className={`border-l-4 ${
+                          line.type === "diff" ? "border-red-500" : "border-transparent"
+                        }`}
                         dangerouslySetInnerHTML={{ __html: line.text }}
                       />
                     ))}
@@ -382,6 +385,9 @@ export default function Home() {
                       <div
                         key={idx}
                         data-type={line.type}
+                        className={`border-l-4 ${
+                          line.type === "diff" ? "border-green-500" : "border-transparent"
+                        }`}
                         dangerouslySetInnerHTML={{ __html: line.text }}
                       />
                     ))}
